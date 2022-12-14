@@ -1,0 +1,175 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+hello - if you're reading this, this first section sets up what we need for the base map.
+
+
+```{r}
+
+
+library(osmdata)
+library(smoothr)
+library(tidycensus)
+library(tigris)
+library(tmap)
+library(tmaptools)
+library(units)
+library(grid)
+library(gridExtra)
+library(ggplot2)
+library(tibble)
+library(stringr)
+library(scales)
+library(reticulate)
+library(ggpubr)
+library(tidyverse)
+library(sf)
+library(extrafont)
+library(lwgeom)
+library(ggspatial)
+library(viridis)
+library(ggrepel)
+
+options(tigris_use_cache = TRUE)
+
+```
+
+
+
+NYC boundaries - honestly I have no idea what the chunk above does but run it anyway
+
+```{r}
+
+nyc_water <- suppressMessages(rbind(
+  area_water("NY", "New York", class = "sf"),
+  area_water("NY", "Kings", class = "sf"),
+  area_water("NY", "Queens", class = "sf"),
+  area_water("NY", "Bronx", class = "sf"),
+  area_water("NY", "Richmond", class = "sf"),
+  area_water("NY", "Nassau", class = "sf"),
+  area_water("NY", "Westchester", class = "sf"),
+  area_water("NJ", "Bergen", class = "sf"),
+  area_water("NJ", "Hudson", class = "sf")) %>% 
+  st_transform(26918) %>% 
+  st_union())
+
+
+## Import CMA, city and county boundaries
+library(dplyr)
+library(stringr)
+
+nyc_msa <- suppressMessages(suppressWarnings(
+  counties(state = c("New York", "New Jersey"), class = "sf") %>% 
+    as_tibble() %>% 
+    st_as_sf() %>% 
+    st_transform(26918) %>% 
+    filter(NAME %in% c("New York", "Kings", "Queens", "Bronx", "Richmond",
+                       "Nassau", "Westchester", "Bergen", "Hudson", "Monmouth",
+                       "Middlesex", "Somerset", "Morris", "Essex", "Union",
+                       "Passaic"),
+           !(STATEFP == "36" & NAME == "Essex")) %>% 
+    st_erase(
+      rbind(
+        area_water("NY", "New York", class = "sf"),
+        area_water("NY", "Kings", class = "sf"),
+        area_water("NY", "Queens", class = "sf"),
+        area_water("NY", "Bronx", class = "sf"),
+        area_water("NY", "Richmond", class = "sf"),
+        area_water("NY", "Nassau", class = "sf"),
+        area_water("NY", "Westchester", class = "sf"),
+        area_water("NJ", "Bergen", class = "sf"),
+        area_water("NJ", "Hudson", class = "sf"),
+        area_water("NJ", "Union", class = "sf"),
+        area_water("NJ", "Middlesex", class = "sf"),
+        area_water("NJ", "Somerset", class = "sf"),
+        area_water("NJ", "Morris", class = "sf"),
+        area_water("NJ", "Monmouth", class = "sf"),
+        area_water("NJ", "Essex", class = "sf"),
+        area_water("NJ", "Passaic", class = "sf")) %>% 
+        st_transform(26918) %>% 
+        st_union()
+    )))
+nyc_city <- nyc_msa %>%
+  filter(NAME %in% c("New York", "Kings", "Queens", "Bronx", "Richmond")) %>% 
+  st_union()
+
+manhattan <- nyc_msa %>% filter(NAME == "New York")
+bronx <- nyc_msa %>% filter(NAME == "Bronx")
+
+nyc_msa <- st_union(nyc_msa)
+```
+
+
+```{r}
+## Import PUMAs
+
+nyc_pumas <- pumas(36, class = "sf") %>% 
+  st_transform(26918) %>%
+  as_tibble() %>% 
+  st_as_sf() %>%
+  mutate(PUMA_name = NAMELSAD10) %>% 
+  select(-GEOID10, -NAMELSAD10, -STATEFP10, -MTFCC10, -FUNCSTAT10, -ALAND10,
+         -AWATER10, -INTPTLAT10, -INTPTLON10) %>%
+  filter(str_detect(PUMA_name, "NYC-"))
+```
+
+
+
+okay now we can create the base map!
+```{r}
+library(sf)
+base_map <- tm_shape(nyc_msa, bbox = bb(st_bbox(nyc_city), xlim=c(-0.02, 1.02),
+                                        ylim=c(0.01, 1.05), relative = TRUE),
+                     unit = "mi") +
+  tm_fill(col = "#f0f0f0") +
+  tm_shape(nyc_city) +
+  tm_fill(col = "grey80", title = "Base Map") +
+  tm_scale_bar(position = c("right", "bottom"), color.dark = "grey50") +
+  tm_layout(frame = TRUE, main.title.size = 1.5, legend.title.size = 1.2,
+            legend.title.fontfamily = "Futura-CondensedExtraBold",
+            legend.position = c("left", "top"),
+            fontfamily = "Futura-Medium",
+            title.fontfamily = "Futura-CondensedExtraBold")
+```
+
+
+this is the shape file from, pls download it: 
+https://data.cityofnewyork.us/widgets/i8iw-xf4u
+
+```{r}
+nyc_zip <- st_read(dsn ="C:/Users/nour/Downloads/ZIP_CODE_040114 (1)/ZIP_CODE_040114.shp")
+```
+
+so here we will create the poulation map for each zip code, v exciting
+please note if you read the nyc_zip after performing st_read, you'll note that population is one of the columns, but next we're going to mutate 1 of our datasets to add on to the shapefile, and make another map :)
+
+```{r}
+base_map +
+  tm_shape(nyc_zip)  +
+  tm_polygons("POPULATION", border.alpha = 0, 
+              title = "Inside service area: 15.9%\nOutside service area: 20.3%", 
+              palette = "-Purples",
+              )
+
+```
+
+
+this is a file I made w python
+dplyr is mad, but you'll get the idea in a minute
+1) ETL the data you need so you have a table of zipcodes and whatever # you need
+2) join with the shapefile nyc_zip
+3) pass the # in 1 to tm_polygons() as before
+
+```{r}
+pop_destn = read.csv('C:/Users/nour/Downloads/most_popular_citibike_destinations.csv')
+pop_destn = pop_destn %>%
+  rename( zip = zip_end, num_visits = zip_end.1 )
+head(pop_destn)
+```
+
+```{r}
+
+inner_join(nyc_zip, pop_destn, by=c("ZIPCODE","zip_end"))
+```
